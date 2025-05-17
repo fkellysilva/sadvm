@@ -1,20 +1,59 @@
-# Use an official Bun runtime as a parent image
-FROM oven/bun:1 AS base
+# Use the official Bun image as base
+FROM oven/bun:1 as builder
 
-# Set the working directory in the container
-WORKDIR /usr/src/app
 
-# Copy package.json and bun.lock
-# Install dependencies first to leverage Docker cache
+# Set working directory
+WORKDIR /app
+
+
+# Copy package files
 COPY package.json bun.lock ./
+
+
+# Install dependencies
 RUN bun install --frozen-lockfile
 
-# Copy the rest of the application code
+
+# Copy source code
 COPY . .
 
-# Bun automatically exposes port 3000 by default with Elysia
-# If your app uses a different port, change it here
+
+# Create a production build if needed (for typescript)
+RUN bun build ./src/index.ts --outdir ./dist --target bun
+
+
+# Start a new stage for a smaller production image
+FROM oven/bun:1-slim
+
+
+# Set working directory
+WORKDIR /app
+
+
+# Copy only necessary files from builder
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/package.json ./
+COPY --from=builder /app/bun.lock ./
+COPY --from=builder /app/kysely ./kysely
+
+
+# Install only production dependencies
+RUN bun install --frozen-lockfile --production
+
+
+# Set environment variables
+ENV NODE_ENV=production
+
+
+# Expose the port the app runs on
 EXPOSE 3333
 
-# Define the command to run the app
-CMD ["bun", "run", "src/index.ts"] 
+
+# Command to run the app
+CMD ["bun", "dist/index.js"]
+
+
+
+
+
+
