@@ -16,9 +16,19 @@ export async function up(db: Kysely<any>): Promise<void> {
 		.addColumn('unidade_medida', 'varchar(20)')
 		.addColumn('ativo', 'boolean', (col) => col.defaultTo(true))
 		.execute()
+
+	await db.schema
+		.createIndex('idx_produto_categoria')
+		.on('produto')
+		.columns(['id_categoria'])
+		.execute()
 }
 
 export async function down(db: Kysely<any>): Promise<void> {
+	await db.schema
+		.dropIndex('idx_produto_categoria')
+		.execute()
+
 	await db.schema
 		.dropTable('produto')
 		.ifExists()

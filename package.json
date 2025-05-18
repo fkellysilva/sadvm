@@ -5,7 +5,8 @@
    "test": "echo \"Error: no test specified\" && exit 1",
    "dev": "bun run --watch src/index.ts | pino-pretty",
    "make:migration": "bunx kysely-ctl migrate:make",
-   "db:erase": "bunx kysely-ctl migrate:rollback --all",
+   "db:down": "bunx kysely-ctl migrate:rollback --all",
+   "db:up": "bunx kysely-ctl migrate:up --all",
    "db:generate": "bunx kysely-codegen --camel-case --dialect=postgres --out-file=src/common/database/types.ts --singularize  --include-pattern='public.*' --runtime-enums=false"
  },
   "dependencies": {
