@@ -8,7 +8,8 @@
    "db:down": "bunx kysely-ctl migrate:rollback --all",
    "db:up": "bunx kysely-ctl migrate:up --all",
    "db:generate": "bunx kysely-codegen --camel-case --dialect=postgres --out-file=src/common/database/types.ts --singularize  --include-pattern='public.*' --runtime-enums=false",
-   "db:seed": "bun run kysely/seeds/seed.ts"
+   "db:seed": "bun run kysely/seeds/seed.ts",
+   "db:seed:dw": "bun run kysely/dw_seeds/run_all_dw_seeds.ts"
  },
   "dependencies": {
     "@bogeychan/elysia-logger": "^0.1.8",

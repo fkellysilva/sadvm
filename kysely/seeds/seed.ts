@@ -82,33 +82,34 @@ export async function seed(db: Kysely<DB>): Promise<void> {
         { codigoProduto: 'BRIN005', nomeProduto: 'Jogo de Tabuleiro', descricao: 'Jogo War clássico', idCategoria: 8, marca: 'Grow', precoAtual: 89.90, unidadeMedida: 'CX' },
     ];
 
-    // Kysely typically returns the inserted rows with IDs.
-    // However, to keep this simpler and closer to the SQL script's logic,
-    // we'll assume IDs are sequential starting from 1 if not specified otherwise.
-    // For tables where IDs are explicitly given (like 'produto' with 'id_produto'),
-    // we use those. If your 'id_produto' is auto-generated, you'd need to fetch them.
-    // The SQL provided has pre-defined IDs for product_fornecedor, which implies produto.id_produto is known.
-    // Let's assume produto.id_produto is an auto-incrementing PK.
-    // We need to insert and get their generated IDs.
+    const productValues = produtos.map(p => ({
+        codigoProduto: p.codigoProduto,
+        nomeProduto: p.nomeProduto,
+        descricao: p.descricao,
+        idCategoria: p.idCategoria, // Assuming categories are seeded first and IDs are known/stable or fetched
+        marca: p.marca,
+        precoAtual: p.precoAtual,
+        unidadeMedida: p.unidadeMedida,
+    }));
 
-    // For tables with auto-generated primary keys, Kysely's `returning` can fetch them.
-    // The provided SQL for `produto` does not have an `id_produto` column in its INSERT.
-    // It has `codigo_produto`. Assuming `id_produto` is the PK and auto-generated.
-    // We'll insert products and then query them back to map `codigo_produto` to `id_produto`
-    // if needed for foreign keys in other tables.
-    // Or, if `id_categoria` refers to `categoria.id_categoria` (auto-incremented).
-
-    await db.insertInto('produto').values(produtos.map(p => ({
-        ...p,
-        // idCategoria should map to the PK of 'categoria'
-        // if 'id_categoria' in 'produto' table is indeed a FK to 'categoria.id_categoria'
-        // and 'categoria.id_categoria' is auto-generated.
-        // The provided SQL implies id_categoria values 1-8, matching the order of categoria inserts.
-    }))).execute();
-    console.log('Produtos inseridos.');
+    await db.insertInto('produto')
+      .values(productValues)
+      .onConflict(oc => oc
+        .column('codigoProduto') // The column with the unique constraint
+        .doUpdateSet(eb => ({ // Update these columns if conflict occurs
+          nomeProduto: eb.ref('excluded.nomeProduto'),
+          descricao: eb.ref('excluded.descricao'),
+          idCategoria: eb.ref('excluded.idCategoria'),
+          marca: eb.ref('excluded.marca'),
+          precoAtual: eb.ref('excluded.precoAtual'),
+          unidadeMedida: eb.ref('excluded.unidadeMedida'),
+          // idProduto is likely serial and should not be updated here
+        }))
+      )
+      .execute();
+    console.log('Produtos inseridos/atualizados.');
 
     // Retrieve inserted products to get their actual IDs if they are auto-generated
-    // This is crucial if other tables reference `produto.id_produto`
     const insertedProdutos = await db.selectFrom('produto').selectAll().execute();
     const produtoIdMap = new Map(insertedProdutos.map(p => [p.codigoProduto, p.idProduto]));
 
@@ -126,8 +127,23 @@ export async function seed(db: Kysely<DB>): Promise<void> {
         { codigoLoja: 'LJ007', nomeLoja: 'Loja Brasília Shopping', endereco: 'SCN Q 6 L 2', cidade: 'Brasília', estado: 'DF', cep: '70716900', telefone: '61-3456-7890', gerente: 'Roberto Alves' },
         { codigoLoja: 'LJ008', nomeLoja: 'Loja Curitiba Shopping', endereco: 'Av. das Torres, 1700', cidade: 'Curitiba', estado: 'PR', cep: '82840730', telefone: '41-3456-7890', gerente: 'Juliana Martins' },
     ];
-    await db.insertInto('loja').values(lojas).execute();
-    console.log('Lojas inseridas.');
+    await db.insertInto('loja')
+      .values(lojas) // lojas is the array of store objects
+      .onConflict(oc => oc
+        .column('codigoLoja') // The column with the unique constraint
+        .doUpdateSet(eb => ({ // Update these columns if conflict occurs
+          nomeLoja: eb.ref('excluded.nomeLoja'),
+          endereco: eb.ref('excluded.endereco'),
+          cidade: eb.ref('excluded.cidade'),
+          estado: eb.ref('excluded.estado'),
+          cep: eb.ref('excluded.cep'),
+          telefone: eb.ref('excluded.telefone'),
+          gerente: eb.ref('excluded.gerente')
+          // idLoja is likely serial and should not be updated here
+        }))
+      )
+      .execute();
+    console.log('Lojas inseridas/atualizadas.');
     const insertedLojas = await db.selectFrom('loja').selectAll().execute();
     const lojaIdMap = new Map(insertedLojas.map(l => [l.codigoLoja, l.idLoja]));
 
@@ -166,8 +182,31 @@ export async function seed(db: Kysely<DB>): Promise<void> {
         { codigoFuncionario: 'FUNC019', nome: 'Marcos Dias', cargo: 'Vendedor', idLoja: lojaIdMap.get('LJ005'), salario: 2500.00 },
         { codigoFuncionario: 'FUNC020', nome: 'Elaine Barros', cargo: 'Caixa', idLoja: lojaIdMap.get('LJ005'), salario: 2200.00 },
     ];
-    await db.insertInto('funcionario').values(funcionarios.filter(f => f.idLoja !== undefined) as any).execute(); // Cast to any to bypass strict type check if idLoja is potentially undefined due to map.get
-    console.log('Funcionários inseridos.');
+
+    const funcionarioValues = funcionarios
+    .filter(f => f.idLoja !== undefined) // Ensure idLoja is present
+    .map(f => ({ // Map to the columns that exist in the 'funcionario' table
+        codigoFuncionario: f.codigoFuncionario,
+        nome: f.nome,
+        cargo: f.cargo,
+        idLoja: f.idLoja,
+        salario: f.salario,
+    }));
+
+    await db.insertInto('funcionario')
+      .values(funcionarioValues)
+      .onConflict(oc => oc
+        .column('codigoFuncionario') // The column with the unique constraint
+        .doUpdateSet(eb => ({ // Update these columns if conflict occurs
+          nome: eb.ref('excluded.nome'),
+          cargo: eb.ref('excluded.cargo'),
+          idLoja: eb.ref('excluded.idLoja'),
+          salario: eb.ref('excluded.salario')
+          // idFuncionario is likely serial and should not be updated here
+        }))
+      )
+      .execute(); 
+    console.log('Funcionários inseridos/atualizados.');
     const insertedFuncionarios = await db.selectFrom('funcionario').selectAll().execute();
     const funcionarioIdMap = new Map(insertedFuncionarios.map(f => [f.codigoFuncionario, f.idFuncionario]));
 
@@ -191,8 +230,24 @@ export async function seed(db: Kysely<DB>): Promise<void> {
         { cpf: '44556677889', nome: 'Daniela Sousa Lima', email: 'daniela.lima@email.com', telefone: '71-85432-1098', endereco: 'Av. Sete de Setembro, 159', cidade: 'Salvador', estado: 'BA', cep: '40060500' },
         { cpf: '55667788990', nome: 'Marcelo Ferreira Costa', email: 'marcelo.costa@email.com', telefone: '51-84321-0987', endereco: 'Av. Ipiranga, 753', cidade: 'Porto Alegre', estado: 'RS', cep: '90160091' },
     ];
-    await db.insertInto('cliente').values(clientes).execute();
-    console.log('Clientes inseridos.');
+
+    await db.insertInto('cliente')
+      .values(clientes) // clientes is the array of client objects
+      .onConflict(oc => oc
+        .column('cpf') // The column with the unique constraint
+        .doUpdateSet(eb => ({ // Update these columns if conflict occurs
+          nome: eb.ref('excluded.nome'),
+          email: eb.ref('excluded.email'),
+          telefone: eb.ref('excluded.telefone'),
+          endereco: eb.ref('excluded.endereco'),
+          cidade: eb.ref('excluded.cidade'),
+          estado: eb.ref('excluded.estado'),
+          cep: eb.ref('excluded.cep')
+          // idCliente is likely serial and should not be updated here
+        }))
+      )
+      .execute();
+    console.log('Clientes inseridos/atualizados.');
     const insertedClientes = await db.selectFrom('cliente').selectAll().execute();
     // CPF is likely the business key, idCliente is the PK.
     const clienteIdMap = new Map(insertedClientes.map(c => [c.cpf, c.idCliente]));
@@ -213,8 +268,23 @@ export async function seed(db: Kysely<DB>): Promise<void> {
         { cnpj: '90123456000188', razaoSocial: 'JBL do Brasil', nomeFantasia: 'JBL', telefone: '11-3048-1700', email: 'suporte@jbl.com.br', endereco: 'Rua James Clerk Maxwell, 170', cidade: 'Campinas', estado: 'SP' },
         { cnpj: '01234567000199', razaoSocial: 'Melitta do Brasil', nomeFantasia: 'Melitta', telefone: '47-3801-5000', email: 'sac@melitta.com.br', endereco: 'Rua Dona Francisca, 8300', cidade: 'Joinville', estado: 'SC' },
     ];
-    await db.insertInto('fornecedor').values(fornecedores).execute();
-    console.log('Fornecedores inseridos.');
+    await db.insertInto('fornecedor')
+      .values(fornecedores) // fornecedores is the array of supplier objects
+      .onConflict(oc => oc
+        .column('cnpj') // The column with the unique constraint
+        .doUpdateSet(eb => ({ // Update these columns if conflict occurs
+          razaoSocial: eb.ref('excluded.razaoSocial'),
+          nomeFantasia: eb.ref('excluded.nomeFantasia'),
+          telefone: eb.ref('excluded.telefone'),
+          email: eb.ref('excluded.email'),
+          endereco: eb.ref('excluded.endereco'),
+          cidade: eb.ref('excluded.cidade'),
+          estado: eb.ref('excluded.estado')
+          // idFornecedor is likely serial and should not be updated here
+        }))
+      )
+      .execute();
+    console.log('Fornecedores inseridos/atualizados.');
     const insertedFornecedores = await db.selectFrom('fornecedor').selectAll().execute();
     // CNPJ is the business key, idFornecedor is the PK.
     const fornecedorIdMap = new Map(insertedFornecedores.map(f => [f.cnpj, f.idFornecedor]));
