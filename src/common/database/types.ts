@@ -3,4 +3,180 @@
  * Please do not edit it manually.
  */
 
-export interface DB {}
+import type { ColumnType } from "kysely";
+
+export type Generated<T> = T extends ColumnType<infer S, infer I, infer U>
+  ? ColumnType<S, I | undefined, U>
+  : ColumnType<T, T | undefined, T>;
+
+export type Numeric = ColumnType<string, number | string, number | string>;
+
+export type Timestamp = ColumnType<Date, Date | string, Date | string>;
+
+export interface Avaliacao {
+  comentario: string | null;
+  dataAvaliacao: Timestamp | null;
+  idAvaliacao: Generated<number>;
+  idCliente: number | null;
+  idProduto: number | null;
+  nota: number | null;
+}
+
+export interface Categoria {
+  descricao: string | null;
+  idCategoria: Generated<number>;
+  nomeCategoria: string;
+}
+
+export interface Cliente {
+  ativo: Generated<boolean | null>;
+  cep: string | null;
+  cidade: string | null;
+  cpf: string;
+  email: string | null;
+  endereco: string | null;
+  estado: string | null;
+  idCliente: Generated<number>;
+  nome: string;
+  telefone: string | null;
+}
+
+export interface Compra {
+  dataCompra: Timestamp | null;
+  idCompra: Generated<number>;
+  idFornecedor: number | null;
+  idLoja: number | null;
+  numeroCompra: string;
+  statusCompra: string | null;
+  valorTotal: Numeric | null;
+}
+
+export interface Estoque {
+  idEstoque: Generated<number>;
+  idLoja: number | null;
+  idProduto: number | null;
+  quantidadeAtual: number | null;
+  quantidadeMaxima: number | null;
+  quantidadeMinima: number | null;
+}
+
+export interface Fornecedor {
+  ativo: Generated<boolean | null>;
+  cidade: string | null;
+  cnpj: string;
+  email: string | null;
+  endereco: string | null;
+  estado: string | null;
+  idFornecedor: Generated<number>;
+  nomeFantasia: string | null;
+  razaoSocial: string;
+  telefone: string | null;
+}
+
+export interface Funcionario {
+  ativo: Generated<boolean | null>;
+  cargo: string | null;
+  codigoFuncionario: string;
+  idFuncionario: Generated<number>;
+  idLoja: number | null;
+  nome: string;
+  salario: Numeric | null;
+}
+
+export interface ItemCompra {
+  idCompra: number | null;
+  idItem: Generated<number>;
+  idProduto: number | null;
+  precoUnitario: Numeric | null;
+  quantidade: number | null;
+  valorTotal: Numeric | null;
+}
+
+export interface ItemVenda {
+  desconto: Numeric | null;
+  idItem: Generated<number>;
+  idProduto: number | null;
+  idVenda: number | null;
+  precoUnitario: Numeric | null;
+  quantidade: number | null;
+  valorTotal: Numeric | null;
+}
+
+export interface Loja {
+  ativa: Generated<boolean | null>;
+  cep: string | null;
+  cidade: string | null;
+  codigoLoja: string;
+  endereco: string | null;
+  estado: string | null;
+  gerente: string | null;
+  idLoja: Generated<number>;
+  nomeLoja: string;
+  telefone: string | null;
+}
+
+export interface Produto {
+  ativo: Generated<boolean | null>;
+  codigoProduto: string;
+  descricao: string | null;
+  idCategoria: number | null;
+  idProduto: Generated<number>;
+  marca: string | null;
+  nomeProduto: string;
+  precoAtual: Numeric | null;
+  unidadeMedida: string | null;
+}
+
+export interface ProdutoFornecedor {
+  idFornecedor: number;
+  idProduto: number;
+  prazoEntrega: number | null;
+  precoCompra: Numeric | null;
+}
+
+export interface ProdutoPromocao {
+  idProduto: number;
+  idPromocao: number;
+  precoPromocional: Numeric | null;
+}
+
+export interface Promocao {
+  ativa: Generated<boolean | null>;
+  dataFim: Timestamp | null;
+  dataInicio: Timestamp | null;
+  descricao: string | null;
+  idPromocao: Generated<number>;
+  nomePromocao: string;
+  percentualDesconto: Numeric | null;
+}
+
+export interface Venda {
+  dataVenda: Timestamp | null;
+  descontoTotal: Numeric | null;
+  formaPagamento: string | null;
+  idCliente: number | null;
+  idFuncionario: number | null;
+  idLoja: number | null;
+  idVenda: Generated<number>;
+  numeroVenda: string;
+  statusVenda: string | null;
+  valorTotal: Numeric | null;
+}
+
+export interface DB {
+  avaliacao: Avaliacao;
+  categoria: Categoria;
+  cliente: Cliente;
+  compra: Compra;
+  estoque: Estoque;
+  fornecedor: Fornecedor;
+  funcionario: Funcionario;
+  itemCompra: ItemCompra;
+  itemVenda: ItemVenda;
+  loja: Loja;
+  produto: Produto;
+  produtoFornecedor: ProdutoFornecedor;
+  produtoPromocao: ProdutoPromocao;
+  promocao: Promocao;
+  venda: Venda;
+}
