@@ -1,149 +1,126 @@
 import { Kysely, sql } from 'kysely';
-// import type { DB as VarejobaseDB } from '../../src/common/database/types';
-// import type { DB as DataWarehouseDB } from './path-to-your-data-warehouse-types';
+import type { DB } from '../../src/common/database/types'; // Main DB types
 
-// Assume 'db' is your Kysely instance.
-// import { db } from '../../src/common/database/db';
-
+// Changed function signature to use Kysely<any>
 export async function seedFactSales(db: Kysely<any>): Promise<void> {
-  console.log('Seeding fact_sales...');
+  console.log('Seeding data_warehouse.fact_sales...');
 
-  // Clear the table for a fresh seed during development/initial load
-  // For incremental loads, this would be different.
-  // await db.deleteFrom('data_warehouse.fact_sales').execute();
-
-  // Extract data from varejobase.itemVenda and join with varejobase.venda
-  const sourceSaleItems = await db
-    .selectFrom('itemVenda')
-    .innerJoin('venda', 'venda.idVenda', 'itemVenda.idVenda')
+  // 1. Select all sales items from the OLTP database
+  const salesItems = await db // Use db directly
+    .selectFrom('itemVenda as iv')
+    .innerJoin('venda as v', 'v.idVenda', 'iv.idVenda')
+    .innerJoin('produto as p', 'p.idProduto', 'iv.idProduto')
+    .innerJoin('cliente as c', 'c.idCliente', 'v.idCliente')
+    .innerJoin('loja as l', 'l.idLoja', 'v.idLoja')
+    .innerJoin('funcionario as e', 'e.idFuncionario', 'v.idFuncionario')
     .select([
-      'itemVenda.id_item as originalSaleItemId',
-      'itemVenda.idProduto',
-      'itemVenda.quantidade',
-      'itemVenda.precoUnitario',
-      'itemVenda.desconto',
-      'itemVenda.valorTotal as lineTotalAmount',
-      'venda.idVenda as originalSaleId',
-      'venda.idCliente',
-      'venda.idLoja',
-      'venda.idFuncionario',
-      'venda.dataVenda',
+      'iv.idItem as olpt_item_venda_id',
+      'v.idVenda as olpt_venda_id',
+      'v.dataVenda as sale_date',
+      'c.cpf as customer_cpf',
+      'e.codigoFuncionario as employee_code',
+      'l.codigoLoja as store_code',
+      'p.codigoProduto as product_code',
+      'iv.quantidade as quantity_sold',
+      'iv.preco_unitario as unit_price',
+      'iv.desconto as item_discount_amount',
+      sql<number>`iv.quantidade * iv.preco_unitario`.as('gross_amount'),
+      'iv.valor_total as net_amount_after_item_discount',
+      'v.descontoTotal as sale_total_discount',
+      'v.valorTotal as sale_total_value'
     ])
     .execute();
 
-  if (sourceSaleItems.length === 0) {
-    console.log('No sale items found in source tables. Skipping seed.');
+  if (salesItems.length === 0) {
+    console.log('No sales items found in OLTP to seed into data_warehouse.fact_sales.');
     return;
   }
 
-  const dwFactSales: any[] = [];
-
-  for (const item of sourceSaleItems) {
-    const saleDate = item.dataVenda instanceof Date ? item.dataVenda.toISOString().split('T')[0] : item.dataVenda.toString().split('T')[0];
-
-    const dateKeyResult = await db.selectFrom('data_warehouse.dim_date')
-      .select('date_key')
-      // Use sql.raw to ensure the date comparison is handled correctly by the DB
-      // and to avoid potential type issues with Kysely's ExpressionBuilder.
-      // Ensure item.dataVenda is formatted as 'YYYY-MM-DD' string for this comparison if it's a JS Date.
-      .where(sql<boolean>`date(date_actual) = ${saleDate}`)
-      .limit(1)
-      .executeTakeFirst();
-
-    if (!dateKeyResult) {
-      console.warn(`Date key not found for date: ${item.dataVenda}. Skipping sale item ID: ${item.originalSaleItemId}`);
-      continue;
-    }
-
-    const productKeyResult = await db.selectFrom('data_warehouse.dim_product')
-      .select('product_key')
-      .where('product_id', '=', item.idProduto)
-      .where('valid_from_date', '<=', item.dataVenda)
-      // Corrected SCD Type 2 condition:
-      // (valid_to_date IS NULL OR valid_to_date > item.dataVenda)
-      // This ensures we get the record that was active at the time of the sale.
-      .where(eb => eb.or([
-        eb('valid_to_date', 'is', null),
-        eb('valid_to_date', '>', item.dataVenda)
-      ]))
-      .orderBy('valid_from_date', 'desc') 
-      .limit(1)
-      .executeTakeFirst();
-
-    if (!productKeyResult) {
-      console.warn(`Product key not found for product ID: ${item.idProduto} at date ${item.dataVenda}. Skipping sale item ID: ${item.originalSaleItemId}`);
-      continue;
-    }
-
-    const customerKeyResult = await db.selectFrom('data_warehouse.dim_customer')
-      .select('customer_key')
-      .where('customer_id', '=', item.idCliente)
-      .limit(1)
-      .executeTakeFirst();
-    if (!customerKeyResult) {
-      console.warn(`Customer key not found for customer ID: ${item.idCliente}. Skipping sale item ID: ${item.originalSaleItemId}`);
-      continue;
-    }
-
-    const storeKeyResult = await db.selectFrom('data_warehouse.dim_store')
-      .select('store_key')
-      .where('store_id', '=', item.idLoja)
-      .limit(1)
-      .executeTakeFirst();
-    if (!storeKeyResult) {
-      console.warn(`Store key not found for store ID: ${item.idLoja}. Skipping sale item ID: ${item.originalSaleItemId}`);
-      continue;
-    }
-
-    let employeeKey: number | null = null;
-    if (item.idFuncionario) {
-      const employeeKeyResult = await db.selectFrom('data_warehouse.dim_employee')
-        .select('employee_key')
-        .where('employee_id', '=', item.idFuncionario)
-        .limit(1)
+  const factSalesData = await Promise.all(
+    salesItems.map(async (item: any) => { // item implicitly has any type from Kysely<any>
+      const dateKey = await db // Use db directly
+        .selectFrom('data_warehouse.dim_date') // Schema-qualified
+        .select('date_key')
+        .where(sql<string>`to_char(date_actual, 'YYYY-MM-DD')`, '=', sql<string>`to_char(${item.sale_date}::date, 'YYYY-MM-DD')`)
         .executeTakeFirst();
-      if (employeeKeyResult) {
-        employeeKey = employeeKeyResult.employee_key;
-      } else {
-        console.warn(`Employee key not found for employee ID: ${item.idFuncionario}. Setting to NULL for sale item ID: ${item.originalSaleItemId}`);
+
+      const customerKey = await db // Use db directly
+        .selectFrom('data_warehouse.dim_customer') // Schema-qualified
+        .select('customer_key')
+        .where('cpf', '=', item.customer_cpf) // Changed from customer_cpf to cpf to match dim_customer seed
+        // .where('is_current', '=', true) // Assuming dim_customer is SCD Type 1 or this is handled by unique CPF constraint
+        .executeTakeFirst();
+
+      const employeeKey = await db // Use db directly
+        .selectFrom('data_warehouse.dim_employee') // Schema-qualified
+        .select('employee_key')
+        .where('employee_code', '=', item.employee_code)
+        // .where('is_current', '=', true) // Assuming SCD Type 1 or handled by unique code
+        .executeTakeFirst();
+      
+      const storeKey = await db // Use db directly
+        .selectFrom('data_warehouse.dim_store') // Schema-qualified
+        .select('store_key')
+        .where('store_code', '=', item.store_code)
+        // .where('is_current', '=', true) // Assuming SCD Type 1 or handled by unique code
+        .executeTakeFirst();
+
+      const productKey = await db // Use db directly
+        .selectFrom('data_warehouse.dim_product') // Schema-qualified
+        .select('product_key')
+        .where('product_code', '=', item.product_code)
+        // .where('is_current', '=', true) // Assuming SCD Type 1 or handled by unique code
+        .executeTakeFirst();
+
+      if (!dateKey || !customerKey || !employeeKey || !storeKey || !productKey) {
+        console.warn(
+          `Could not find all dimension keys for OLTP sale item ID: ${item.olpt_item_venda_id}. Skipping. Details:`,
+          { dateKey, customerKey, employeeKey, storeKey, productKey, saleDate: item.sale_date, customer_cpf: item.customer_cpf, employee_code: item.employee_code, store_code: item.store_code, product_code: item.product_code }
+        );
+        return null;
       }
+      
+      const itemGrossAmount = Number(item.gross_amount);
+      const itemDiscount = Number(item.item_discount_amount);
+      const netAfterItemDiscount = Number(item.net_amount_after_item_discount);
+      const saleTotalValue = Number(item.sale_total_value);
+      const saleTotalDiscount = Number(item.sale_total_discount);
+
+      const itemProportionOfSale = saleTotalValue > 0 ? netAfterItemDiscount / saleTotalValue : 0;
+      const proportionalSaleDiscount = saleTotalDiscount * itemProportionOfSale;
+      const finalNetAmount = netAfterItemDiscount - proportionalSaleDiscount;
+
+      return {
+        date_key: dateKey.date_key,
+        customer_key: customerKey.customer_key,
+        employee_key: employeeKey.employee_key,
+        store_key: storeKey.store_key,
+        product_key: productKey.product_key,
+        oltp_sale_id: item.olpt_venda_id, // Already number if from DB
+        oltp_sale_item_id: item.olpt_item_venda_id, // Already number
+        quantity_sold: item.quantity_sold, // Already number
+        unit_price: Number(item.unit_price),
+        gross_amount: itemGrossAmount,
+        item_discount_amount: itemDiscount,
+        net_amount_after_item_discount: netAfterItemDiscount, 
+        proportional_sale_discount_amount: Number(proportionalSaleDiscount.toFixed(2)),
+        final_net_amount: Number(finalNetAmount.toFixed(2)),
+      };
+    })
+  );
+
+  const validFactSalesData = factSalesData.filter(data => data !== null);
+
+  if (validFactSalesData.length > 0) {
+    await db.deleteFrom('data_warehouse.fact_sales').execute(); // Schema-qualified
+
+    const batchSize = 100;
+    for (let i = 0; i < validFactSalesData.length; i += batchSize) {
+      const batch = validFactSalesData.slice(i, i + batchSize);
+      await db.insertInto('data_warehouse.fact_sales').values(batch as any).execute(); // Schema-qualified, cast batch as any if type issues persist
     }
-
-    dwFactSales.push({
-      date_key: dateKeyResult.date_key,
-      product_key: productKeyResult.product_key,
-      customer_key: customerKeyResult.customer_key,
-      store_key: storeKeyResult.store_key,
-      employee_key: employeeKey,
-      original_sale_id: item.originalSaleId,
-      original_sale_item_id: item.originalSaleItemId,
-      quantity_sold: item.quantidade,
-      unit_price_at_sale: item.precoUnitario,
-      discount_amount_item: item.desconto,
-      line_total_amount: item.lineTotalAmount,
-    });
-  }
-
-  if (dwFactSales.length > 0) {
-    // Kysely insert many might be slow for very large arrays. Consider chunking for production.
-    await db.insertInto('data_warehouse.fact_sales').values(dwFactSales).execute();
-    console.log(`fact_sales seeded with ${dwFactSales.length} records.`);
+    console.log(`Successfully seeded ${validFactSalesData.length} records into data_warehouse.fact_sales.`);
   } else {
-    console.log('No data to seed into fact_sales after lookups.');
+    console.log('No valid data to seed into data_warehouse.fact_sales after dimension lookup.');
   }
-}
-
-// Example of how to run:
-/*
-import { db } from '../../src/common/database/db';
-async function main() {
-  try {
-    await seedFactSales(db);
-  } catch (error) {
-    console.error('Error seeding fact_sales:', error);
-  } finally {
-    await db.destroy();
-  }
-}
-main();
-*/ 
+} 

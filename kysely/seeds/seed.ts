@@ -726,13 +726,6 @@ export async function seed(db: Kysely<DB>): Promise<void> {
     console.log('Seed data successfully inserted.');
 }
 
-// If you want to run this seed directly using bun/ts-node for testing, you might add:
-// import { db } from '../../src/common/database/db'; // Path to your db instance
-// seed(db).then(() => console.log('Seeding complete.'))
-//   .catch(err => console.error('Seeding failed:', err))
-//   .finally(() => db.destroy()); // Assuming your db object has a destroy method
-
-
 seed(db).then(() => console.log('Seeding complete.'))
     .catch(err => console.error('Seeding failed:', err))
     .finally(() => db.destroy());

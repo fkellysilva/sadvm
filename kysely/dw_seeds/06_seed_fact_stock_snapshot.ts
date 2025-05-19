@@ -1,121 +1,103 @@
 import { Kysely, sql } from 'kysely';
-// import type { DB as VarejobaseDB } from '../../src/common/database/types';
-// import type { DB as DataWarehouseDB } from './path-to-your-data-warehouse-types';
+// Assuming DB types are for the OLTP (varejobase)
+import type { DB } from '../../src/common/database/types';
 
-// Assume 'db' is your Kysely instance.
-// import { db } from '../../src/common/database/db';
+export async function seedFactStockSnapshot(db: Kysely<any>, snapshotDateISO: string): Promise<void> {
+  console.log(`Seeding data_warehouse.fact_stock_snapshot for date: ${snapshotDateISO}...`);
 
-export async function seedFactStockSnapshot(db: Kysely<any>, snapshotDateString?: string): Promise<void> {
-  console.log('Seeding fact_stock_snapshot...');
-
-  // Determine the snapshot date
-  // If no date string is provided, use the current date.
-  // The date string should be in 'YYYY-MM-DD' format.
-  const snapshotDate = snapshotDateString ? new Date(snapshotDateString) : new Date();
-  const snapshotDateFormatted = snapshotDate.toISOString().split('T')[0]; // 'YYYY-MM-DD'
-
-  // await db.deleteFrom('data_warehouse.fact_stock_snapshot').where(sql<boolean>`date(snapshot_timestamp) = ${snapshotDateFormatted}`).execute();
-
-  // 1. Lookup date_key for the snapshotDate
-  const dateKeyResult = await db.selectFrom('data_warehouse.dim_date')
+  // 1. Get the date_key for the given snapshotDateISO
+  const dateKeyResult = await db
+    .selectFrom('data_warehouse.dim_date')
     .select('date_key')
-    .where(sql<boolean>`date(date_actual) = ${snapshotDateFormatted}`)
-    .limit(1)
+    .where(sql<string>`to_char(date_actual, 'YYYY-MM-DD')`, '=', snapshotDateISO)
     .executeTakeFirst();
 
-  if (!dateKeyResult || dateKeyResult.date_key == null) {
-    console.warn(`Date key not found or is invalid for snapshot date: ${snapshotDateFormatted}. Cannot seed fact_stock_snapshot.`);
+  if (!dateKeyResult) {
+    console.warn(`Date key not found for ${snapshotDateISO} in dim_date. Skipping fact_stock_snapshot seed for this date.`);
     return;
   }
-  const snapshotDateKey = dateKeyResult.date_key;
+  const dateKey = dateKeyResult.date_key;
 
-  // 2. Extract current stock levels from varejobase.estoque
-  const sourceStock = await db
-    .selectFrom('estoque')
-    .selectAll()
+  // 2. Select all current stock levels from the OLTP database
+  // We join with produto and loja to get their business keys (codigoProduto, codigoLoja)
+  // which are used in dim_product and dim_store.
+  const currentStock = await db
+    .selectFrom('estoque as est')
+    .innerJoin('produto as p', 'p.idProduto', 'est.idProduto')
+    .innerJoin('loja as l', 'l.idLoja', 'est.idLoja')
+    .select([
+      'est.idEstoque as oltp_estoque_id', // Assuming idEstoque is the PK of estoque table
+      'p.codigoProduto as product_code',
+      'l.codigoLoja as store_code',
+      'est.quantidadeAtual as quantity_on_hand',
+      'est.quantidadeMinima as min_stock_level',
+      'est.quantidadeMaxima as max_stock_level'
+    ])
     .execute();
 
-  if (sourceStock.length === 0) {
-    console.log('No stock data found in source table (estoque). Skipping seed.');
+  if (currentStock.length === 0) {
+    console.log('No stock data found in OLTP to seed into data_warehouse.fact_stock_snapshot.');
     return;
   }
 
-  const dwFactStockSnapshots: any[] = [];
-
-  for (const item of sourceStock) {
-    // 3. Lookup product_key from dim_product (SCD Type 2 - current for snapshotDate)
-    const productKeyResult = await db.selectFrom('data_warehouse.dim_product')
+  // 3. For each stock item, look up the dimension keys for product and store
+  const factStockDataPromises = currentStock.map(async (stockItem: any) => {
+    const productKeyResult = await db
+      .selectFrom('data_warehouse.dim_product')
       .select('product_key')
-      .where('product_id', '=', item.idProduto)
-      .where('valid_from_date', '<=', snapshotDate)
-      .where(eb => eb.or([
-        eb('valid_to_date', 'is', null),
-        eb('valid_to_date', '>', snapshotDate)
-      ]))
-      .orderBy('valid_from_date', 'desc')
-      .limit(1)
+      .where('product_code', '=', stockItem.product_code)
+      // .where('is_current', '=', true) // Assuming SCD Type 1 or unique product_code
       .executeTakeFirst();
 
-    if (!productKeyResult || productKeyResult.product_key == null) {
-      console.warn(`Product key not found or is null for product ID: ${item.idProduto} current at ${snapshotDateFormatted}. Skipping stock item ID: ${item.idEstoque || 'N/A'}`);
-      continue;
-    }
-
-    // 4. Lookup store_key from dim_store
-    const storeKeyResult = await db.selectFrom('data_warehouse.dim_store')
+    const storeKeyResult = await db
+      .selectFrom('data_warehouse.dim_store')
       .select('store_key')
-      .where('store_id', '=', item.idLoja)
-      .limit(1)
+      .where('store_code', '=', stockItem.store_code)
+      // .where('is_current', '=', true) // Assuming SCD Type 1 or unique store_code
       .executeTakeFirst();
 
-    if (!storeKeyResult || storeKeyResult.store_key == null) {
-      console.warn(`Store key not found or is null for store ID: ${item.idLoja}. Skipping stock item ID: ${item.idEstoque || 'N/A'}`);
-      continue;
+    if (!productKeyResult || !storeKeyResult) {
+      console.warn(
+        `Could not find all dimension keys for OLTP stock ID: ${stockItem.oltp_estoque_id}. Skipping. Details:`,
+        { productKeyResult, storeKeyResult, product_code: stockItem.product_code, store_code: stockItem.store_code }
+      );
+      return null;
     }
 
-    dwFactStockSnapshots.push({
-      date_key: snapshotDateKey,
+    return {
+      date_key: dateKey, // Use the common dateKey for this snapshot
       product_key: productKeyResult.product_key,
       store_key: storeKeyResult.store_key,
-      quantity_on_hand: item.quantidadeAtual,
-      snapshot_timestamp: snapshotDate, // Store the actual date/timestamp of the snapshot
-    });
-  }
+      oltp_estoque_id: stockItem.oltp_estoque_id,
+      quantity_on_hand: Number(stockItem.quantity_on_hand),
+      min_stock_level: Number(stockItem.min_stock_level),
+      max_stock_level: Number(stockItem.max_stock_level),
+    };
+  });
 
-  if (dwFactStockSnapshots.length > 0) {
-    // The table has a unique constraint on (date_key, product_key, store_key).
-    // For an initial load or specific snapshot date, you might clear previous entries for that date
-    // or use ON CONFLICT UPDATE if your DB supports it and that's the desired behavior.
-    // Example: .onConflict((oc) => oc.columns(['date_key', 'product_key', 'store_key']).doUpdateSet({ quantity_on_hand: sql`excluded.quantity_on_hand` }))
-    await db.insertInto('data_warehouse.fact_stock_snapshot')
-      .values(dwFactStockSnapshots)
-      .onConflict(oc => oc.columns(['date_key', 'product_key', 'store_key'])
-        .doUpdateSet(eb => ({
-            quantity_on_hand: eb.ref('excluded.quantity_on_hand'),
-            snapshot_timestamp: eb.ref('excluded.snapshot_timestamp')
-        }))
-      )
+  const factStockSnapshotEntries = (await Promise.all(factStockDataPromises))
+    .filter(data => data !== null);
+
+  if (factStockSnapshotEntries.length > 0) {
+    // For a snapshot fact table, you typically insert, not clear and insert,
+    // unless you are re-seeding for a *specific day*.
+    // The run_all_dw_seeds.ts script logic suggests it's for one specific snapshot date.
+    // So, we should delete records for THIS specific date_key before inserting.
+    await db
+      .deleteFrom('data_warehouse.fact_stock_snapshot')
+      .where('date_key', '=', dateKey)
       .execute();
-    console.log(`fact_stock_snapshot seeded/updated with ${dwFactStockSnapshots.length} records for date ${snapshotDateFormatted}.`);
-  } else {
-    console.log(`No data to seed into fact_stock_snapshot for date ${snapshotDateFormatted} after lookups.`);
-  }
-}
+    
+    console.log(`Cleared existing data from data_warehouse.fact_stock_snapshot for date_key: ${dateKey}`);
 
-// Example of how to run:
-/*
-import { db } from '../../src/common/database/db';
-async function main() {
-  try {
-    // To seed for today:
-    await seedFactStockSnapshot(db);
-    // To seed for a specific date:
-    // await seedFactStockSnapshot(db, '2023-10-26'); 
-  } catch (error) {
-    console.error('Error seeding fact_stock_snapshot:', error);
-  } finally {
-    await db.destroy();
+    // Batch insert
+    const batchSize = 100; // Adjust batch size as needed
+    for (let i = 0; i < factStockSnapshotEntries.length; i += batchSize) {
+      const batch = factStockSnapshotEntries.slice(i, i + batchSize);
+      await db.insertInto('data_warehouse.fact_stock_snapshot').values(batch as any).execute();
+    }
+    console.log(`Successfully seeded ${factStockSnapshotEntries.length} records into data_warehouse.fact_stock_snapshot for date_key: ${dateKey}.`);
+  } else {
+    console.log(`No valid data to seed into data_warehouse.fact_stock_snapshot for date_key: ${dateKey} after dimension lookup.`);
   }
-}
-main();
-*/ 
+} 

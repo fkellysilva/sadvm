@@ -21,6 +21,7 @@ export async function seedDimProduct(db: Kysely<any>): Promise<void> {
       'produto.marca',
       'produto.unidadeMedida',
       'produto.precoAtual',
+      // 'produto.dataCadastro', // Removed as it does not exist
     ])
     .execute();
 
@@ -29,7 +30,7 @@ export async function seedDimProduct(db: Kysely<any>): Promise<void> {
     return;
   }
 
-  const now = new Date(); // For SCD Type 2 fields
+  const now = new Date(); // Use current date for valid_from_date
 
   const dwProducts = sourceProducts.map(sp => ({
     product_id: sp.idProduto,
@@ -40,15 +41,15 @@ export async function seedDimProduct(db: Kysely<any>): Promise<void> {
     brand: sp.marca,
     unit_measure: sp.unidadeMedida,
     unit_price: sp.precoAtual, // This is preco_atual from source, representing current price
-    valid_from_date: now,      // SCD Type 2: Start date of this record version
+    valid_from_date: now, // Use current date as creation date for SCD
     valid_to_date: null,       // SCD Type 2: End date (null for current)
     is_current_version: true,  // SCD Type 2: Flag for current version
     // product_key is serial
   }));
 
-  // For initial load, if re-running, you might want to clear existing data to avoid issues with SCD logic
-  // or implement more complex SCD update logic.
-  // await db.deleteFrom('data_warehouse.dim_product').execute(); 
+  // Clear existing data to avoid SCD conflicts
+  await db.deleteFrom('data_warehouse.dim_product').execute();
+  
   await db
     .insertInto('data_warehouse.dim_product')
     .values(dwProducts)
